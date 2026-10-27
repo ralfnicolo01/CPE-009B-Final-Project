@@ -2,8 +2,8 @@
 import config as cfg
 from PyQt6.QtCore import QTimer, pyqtSignal
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QGroupBox, QLabel,
-                             QSpinBox, QPushButton, QMessageBox, QScrollArea)
-from widgets import GridBoard
+                             QSpinBox, QPushButton, QMessageBox)
+from widgets import GridBoard, label, scroll_page
 from unit_dialog import UnitDialog
 
 
@@ -13,50 +13,45 @@ class EditTab(QWidget):
     def __init__(self, dm):
         super().__init__()
         self.dm = dm
-        outer = QVBoxLayout(self); outer.setContentsMargins(0, 0, 0, 0)
-        scroll = QScrollArea(); scroll.setWidgetResizable(True)
-        page = QWidget(); page.setObjectName("page"); scroll.setWidget(page)
-        outer.addWidget(scroll)
-        root = QVBoxLayout(page); root.setContentsMargins(20, 12, 20, 20); root.setSpacing(14)
+        root = scroll_page(self)
 
         # ---- food stocks ----
         sbox = QGroupBox("Food Stocks")
         g = QGridLayout(sbox); g.setVerticalSpacing(8)
         for c, h in enumerate(("Item", "Current stock", "Maximum (bar scale)")):
-            lbl = QLabel(h); lbl.setStyleSheet("color:#6b7280;font-weight:600;")
-            g.addWidget(lbl, 0, c)
+            g.addWidget(label(h, "head"), 0, c)
         self.stock_spins = {}
-        for r, (key, label) in enumerate(cfg.STOCK_ITEMS.items(), start=1):
+        for r, (key, text) in enumerate(cfg.STOCK_ITEMS.items(), start=1):
             q, m = QSpinBox(), QSpinBox()
             for s in (q, m):
                 s.setRange(0, 1_000_000)
-            g.addWidget(QLabel(label), r, 0); g.addWidget(q, r, 1); g.addWidget(m, r, 2)
+            g.addWidget(QLabel(text), r, 0); g.addWidget(q, r, 1); g.addWidget(m, r, 2)
             self.stock_spins[key] = (q, m)
         n = len(cfg.STOCK_ITEMS) + 1
         self.cycle = QSpinBox(); self.cycle.setRange(1, 14); self.cycle.setSuffix(" days")
+        save_stock = QPushButton("Save stocks"); save_stock.clicked.connect(self.save_stock)
         g.addWidget(QLabel("DSWD relief pack resupply cycle"), n, 0); g.addWidget(self.cycle, n, 1)
-        save_stock = QPushButton("Save stocks")
-        save_stock.clicked.connect(self.save_stock)
         g.addWidget(save_stock, n + 1, 2)
-        g.setColumnStretch(0, 2); g.setColumnStretch(1, 1); g.setColumnStretch(2, 1)
+        for c, s in enumerate((2, 1, 1)):
+            g.setColumnStretch(c, s)
         root.addWidget(sbox)
 
         # ---- layout grid ----
         lbox = QGroupBox("Shelter Layout")
         ll = QVBoxLayout(lbox)
         top = QHBoxLayout()
-        self.cols = QSpinBox(); self.cols.setRange(1, 12)
-        self.rows = QSpinBox(); self.rows.setRange(1, 12)
+        self.cols, self.rows = QSpinBox(), QSpinBox()
+        for s in (self.cols, self.rows):
+            s.setRange(1, 12)
         apply_btn = QPushButton("Apply size"); apply_btn.setProperty("variant", "secondary")
         apply_btn.clicked.connect(self.apply_grid)
         for w in (QLabel("Columns:"), self.cols, QLabel("Rows:"), self.rows, apply_btn):
             top.addWidget(w)
         top.addStretch()
         ll.addLayout(top)
-        hint = QLabel("Click an empty cell to add a unit  ·  Drag a unit to move it "
-                      "(dropping on another unit swaps them)  ·  Double-click a unit to edit or delete it")
-        hint.setStyleSheet("color:#6b7280;font-size:12px;")
-        ll.addWidget(hint)
+        ll.addWidget(label("Click an empty cell to add a unit  ·  Drag a unit to move it "
+                           "(dropping on another unit swaps them)  ·  Double-click a unit to edit or delete it",
+                           "hint"))
         self.board = GridBoard(editable=True)
         self.board.slot_clicked.connect(self.add_at)
         self.board.unit_activated.connect(self.edit_unit)

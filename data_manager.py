@@ -1,75 +1,138 @@
 """All CSV reading/writing and business rules live here (no UI code)."""
 import csv
-import hashlib
-import hmac
-import secrets
 from datetime import date, datetime, timedelta
 
 import config as cfg
 
-USER_F = ["username", "salt", "hash"]
-UNIT_F = ["id", "location", "modality", "capacity", "family_name", "headcount", "col", "row"]
-STOCK_F = ["key", "qty", "max"]
-MEAL_F = ["unit_id", "date", "meal", "status", "ration", "qty"]
-DSWD_F = ["unit_id", "received_date"]
-LOG_F = ["timestamp", "date", "unit_id", "action", "details"]
-SET_F = ["key", "value"]
+FIELDS = {
+    cfg.USERS_CSV: ["username", "password", "role"],
+    cfg.UNITS_CSV: ["id", "location", "modality", "capacity", "family_name", "headcount", "col", "row"],
+    cfg.STOCK_CSV: ["key", "qty", "max"],
+    cfg.MEALS_CSV: ["unit_id", "date", "meal", "status", "ration", "qty"],
+    cfg.DSWD_CSV: ["unit_id", "received_date"],
+    cfg.LOGS_CSV: ["timestamp", "date", "unit_id", "action", "details"],
+    cfg.SETTINGS_CSV: ["key", "value"],
+}
+INT_FIELDS = ("capacity", "headcount", "col", "row")
+_cache = {}   # path -> ((mtime, size), rows): avoids re-parsing a CSV that has not changed
 
 
 def today() -> str:
     return date.today().isoformat()
 
 
+def _active(received_date, cycle) -> bool:
+    """True while a DSWD pack received on `received_date` is still inside its resupply cycle."""
+    return bool(received_date) and (date.today() - date.fromisoformat(received_date)).days < cycle
+
+
+def _meal(r):
+    return ({"status": r["status"], "ration": r["ration"], "qty": int(r["qty"])} if r
+            else {"status": "Pending", "ration": "FFP", "qty": 0})
+
+
 def _read(path):
     if not path.exists():
         return []
-    with open(path, newline="", encoding="utf-8") as f:
-        return list(csv.DictReader(f))
+    s = path.stat()
+    key = (s.st_mtime_ns, s.st_size)
+    if _cache.get(path, (None,))[0] != key:
+        with open(path, newline="", encoding="utf-8") as f:
+            _cache[path] = (key, list(csv.DictReader(f)))
+    return [dict(r) for r in _cache[path][1]]
 
 
-def _write(path, fields, rows):
+def _write(path, rows):
+    _cache.pop(path, None)
     tmp = path.with_suffix(".tmp")
     with open(tmp, "w", newline="", encoding="utf-8") as f:
-        w = csv.DictWriter(f, fieldnames=fields, extrasaction="ignore")
+        w = csv.DictWriter(f, fieldnames=FIELDS[path], extrasaction="ignore")
         w.writeheader()
         w.writerows(rows)
     tmp.replace(path)
-
-
-def _hash(password, salt):
-    return hashlib.sha256((salt + password).encode("utf-8")).hexdigest()
 
 
 class DataManager:
     def __init__(self):
         cfg.DATA_DIR.mkdir(exist_ok=True)
         self._init_files()
+        self._migrate_users()
         self._migrate_positions()
         self.daily_reset()
 
     # ---------- setup ----------
     def _init_files(self):
-        if not cfg.USERS_CSV.exists():
-            salt = secrets.token_hex(8)
-            user, pw = cfg.DEFAULT_ADMIN
-            _write(cfg.USERS_CSV, USER_F, [{"username": user, "salt": salt, "hash": _hash(pw, salt)}])
-        if not cfg.STOCK_CSV.exists():
-            _write(cfg.STOCK_CSV, STOCK_F,
-                   [{"key": k, "qty": q, "max": m} for k, (q, m) in cfg.DEFAULT_STOCK.items()])
-        if not cfg.SETTINGS_CSV.exists():
-            _write(cfg.SETTINGS_CSV, SET_F,
-                   [{"key": "dswd_cycle_days", "value": cfg.DEFAULT_DSWD_CYCLE_DAYS}])
-        for path, fields in ((cfg.UNITS_CSV, UNIT_F), (cfg.MEALS_CSV, MEAL_F),
-                             (cfg.DSWD_CSV, DSWD_F), (cfg.LOGS_CSV, LOG_F)):
+        user, pw = cfg.DEFAULT_ADMIN
+        defaults = {
+            cfg.USERS_CSV: [{"username": user, "password": pw, "role": cfg.ROLES[0]}],
+            cfg.STOCK_CSV: [{"key": k, "qty": q, "max": m} for k, (q, m) in cfg.DEFAULT_STOCK.items()],
+            cfg.SETTINGS_CSV: [{"key": "dswd_cycle_days", "value": cfg.DEFAULT_DSWD_CYCLE_DAYS}],
+        }
+        for path in FIELDS:
             if not path.exists():
-                _write(path, fields, [])
+                _write(path, defaults.get(path, []))
 
     # ---------- auth ----------
     def verify_login(self, username, password) -> bool:
-        for r in _read(cfg.USERS_CSV):
-            if r["username"] == username:
-                return hmac.compare_digest(r["hash"], _hash(password, r["salt"]))
-        return False
+        return any(r["username"] == username and r["password"] == password for r in _read(cfg.USERS_CSV))
+
+    def _migrate_users(self):
+        """Upgrade older users.csv files: missing roles become Administrator, and accounts that only
+        have a hashed password get a plain one (admin -> default, others -> DEFAULT_PASSWORD)."""
+        rows = _read(cfg.USERS_CSV)
+        if any(not r.get("role") or "password" not in r for r in rows):
+            for r in rows:
+                r["role"] = r.get("role") or cfg.ROLES[0]
+                r.setdefault("password", cfg.DEFAULT_ADMIN[1] if r["username"] == cfg.DEFAULT_ADMIN[0]
+                             else cfg.DEFAULT_PASSWORD)
+            _write(cfg.USERS_CSV, rows)
+
+    def users(self):
+        return [{"username": r["username"], "role": r.get("role") or cfg.ROLES[0]} for r in _read(cfg.USERS_CSV)]
+
+    def role_of(self, username):
+        return next((u["role"] for u in self.users() if u["username"] == username), cfg.ROLES[0])
+
+    def _last_admin(self, rows, username):
+        """True if `username` is the only Administrator left."""
+        admins = [r["username"] for r in rows if r["role"] == cfg.ROLES[0]]
+        return admins == [username]
+
+    def add_user(self, username, password, role):
+        """Returns (ok, message)."""
+        username, rows = username.strip(), _read(cfg.USERS_CSV)
+        if not username:
+            return False, "Enter a username."
+        if any(r["username"].lower() == username.lower() for r in rows):
+            return False, "That username is already taken."
+        if len(password) < 6:
+            return False, "Password must be at least 6 characters."
+        if role not in cfg.ROLES:
+            return False, "Pick a role."
+        rows.append({"username": username, "password": password, "role": role})
+        _write(cfg.USERS_CSV, rows)
+        self.log("SYSTEM", "User added", f"{username} ({role})")
+        return True, ""
+
+    def set_role(self, username, role):
+        rows = _read(cfg.USERS_CSV)
+        u = next((r for r in rows if r["username"] == username), None)
+        if not u or u["role"] == role:
+            return True, ""
+        if self._last_admin(rows, username):
+            return False, "At least one Administrator is required."
+        self.log("SYSTEM", "User role changed", f"{username}: {u['role']} -> {role}")
+        u["role"] = role
+        _write(cfg.USERS_CSV, rows)
+        return True, ""
+
+    def delete_user(self, username):
+        rows = _read(cfg.USERS_CSV)
+        if self._last_admin(rows, username):
+            return False, "At least one Administrator is required."
+        _write(cfg.USERS_CSV, [r for r in rows if r["username"] != username])
+        self.log("SYSTEM", "User deleted", username)
+        return True, ""
 
     # ---------- settings ----------
     def _settings(self):
@@ -78,13 +141,16 @@ class DataManager:
     def _put_setting(self, key, value):
         s = self._settings()
         s[key] = value
-        _write(cfg.SETTINGS_CSV, SET_F, [{"key": k, "value": v} for k, v in s.items()])
+        _write(cfg.SETTINGS_CSV, [{"key": k, "value": v} for k, v in s.items()])
+
+    def _int_setting(self, key, default):
+        try:
+            return int(self._settings().get(key, default))
+        except ValueError:
+            return default
 
     def cycle_days(self) -> int:
-        try:
-            return int(self._settings().get("dswd_cycle_days", cfg.DEFAULT_DSWD_CYCLE_DAYS))
-        except ValueError:
-            return cfg.DEFAULT_DSWD_CYCLE_DAYS
+        return self._int_setting("dswd_cycle_days", cfg.DEFAULT_DSWD_CYCLE_DAYS)
 
     def set_cycle(self, days):
         old = self.cycle_days()
@@ -92,14 +158,16 @@ class DataManager:
         if old != days:
             self.log("SYSTEM", "Setting changed", f"DSWD cycle: {old} -> {days} days")
 
+    def dark(self) -> bool:
+        return self._int_setting("dark_mode", 0) == 1
+
+    def set_dark(self, on):
+        self._put_setting("dark_mode", int(on))
+
     def grid_size(self):
         """(columns, rows) of the shelter layout grid."""
-        s = self._settings()
-        try:
-            return (int(s.get("grid_cols", cfg.DEFAULT_GRID[0])),
-                    int(s.get("grid_rows", cfg.DEFAULT_GRID[1])))
-        except ValueError:
-            return cfg.DEFAULT_GRID
+        return (self._int_setting("grid_cols", cfg.DEFAULT_GRID[0]),
+                self._int_setting("grid_rows", cfg.DEFAULT_GRID[1]))
 
     def set_grid(self, cols, rows):
         for u in self.units():
@@ -117,45 +185,34 @@ class DataManager:
     def _migrate_positions(self):
         """Give units from older data files a grid cell (first free cell, row by row)."""
         rows = _read(cfg.UNITS_CSV)
-        missing = lambda r: r.get("col", "") == "" or r.get("row", "") == ""
-        if not any(missing(r) for r in rows):
+        miss = lambda r: r.get("col", "") == "" or r.get("row", "") == ""
+        todo = [r for r in rows if miss(r)]
+        if not todo:
             return
         cols, grid_rows = self.grid_size()
-        taken = {(int(r["col"]), int(r["row"])) for r in rows if not missing(r)}
+        taken = {(int(r["col"]), int(r["row"])) for r in rows if not miss(r)}
         n = 0
-        for r in rows:
-            if missing(r):
-                while (n % cols, n // cols) in taken:
-                    n += 1
-                r["col"], r["row"] = n % cols, n // cols
-                taken.add((r["col"], r["row"]))
+        for r in todo:
+            while (n % cols, n // cols) in taken:
+                n += 1
+            r["col"], r["row"] = n % cols, n // cols
+            taken.add((r["col"], r["row"]))
         need = max(int(r["row"]) for r in rows) + 1
         if need > grid_rows:
             self._put_setting("grid_rows", need)
-        _write(cfg.UNITS_CSV, UNIT_F, rows)
+        _write(cfg.UNITS_CSV, rows)
 
     def units(self):
-        out = []
-        for r in _read(cfg.UNITS_CSV):
-            r["capacity"] = int(r["capacity"])
-            r["headcount"] = int(r["headcount"])
-            r["col"] = int(r["col"])
-            r["row"] = int(r["row"])
-            out.append(r)
-        return out
-
-    def _save_units(self, units):
-        _write(cfg.UNITS_CSV, UNIT_F, units)
+        return [{**r, **{k: int(r[k]) for k in INT_FIELDS}} for r in _read(cfg.UNITS_CSV)]
 
     def add_unit(self, location, modality, capacity, col, row, family_name="", headcount=0) -> str:
         units = self.units()
         prefix = "T" if modality == "Tent" else "C"
         nums = [int(u["id"].split("-")[1]) for u in units if u["id"].startswith(prefix + "-")]
         uid = f"{prefix}-{max(nums, default=0) + 1:03d}"
-        units.append({"id": uid, "location": location, "modality": modality,
-                      "capacity": capacity, "family_name": family_name,
-                      "headcount": headcount, "col": col, "row": row})
-        self._save_units(units)
+        units.append({"id": uid, "location": location, "modality": modality, "capacity": capacity,
+                      "family_name": family_name, "headcount": headcount, "col": col, "row": row})
+        _write(cfg.UNITS_CSV, units)
         self.log(uid, "Unit added", f"{modality} at {location}, capacity {capacity}, "
                                     f"cell column {col + 1} / row {row + 1}")
         return uid
@@ -168,7 +225,7 @@ class DataManager:
             return False
         changes = [f"{k}: {u[k]} -> {v}" for k, v in fields.items() if u.get(k) != v]
         u.update(fields)
-        self._save_units(units)
+        _write(cfg.UNITS_CSV, units)
         if changes:
             self.log(uid, "Unit edited", "; ".join(changes))
         return True
@@ -179,18 +236,18 @@ class DataManager:
         me = next((u for u in units if u["id"] == uid), None)
         if not me or (me["col"], me["row"]) == (col, row):
             return
-        other = next((u for u in units if u["id"] != uid and u["col"] == col and u["row"] == row), None)
+        other = next((u for u in units if u["id"] != uid and (u["col"], u["row"]) == (col, row)), None)
         if other:
             other["col"], other["row"] = me["col"], me["row"]
         me["col"], me["row"] = col, row
-        self._save_units(units)
+        _write(cfg.UNITS_CSV, units)
         self.log(uid, "Unit moved", f"to column {col + 1} / row {row + 1}"
                                     + (f" (swapped with {other['id']})" if other else ""))
 
     def delete_unit(self, uid):
-        self._save_units([u for u in self.units() if u["id"] != uid])
-        _write(cfg.MEALS_CSV, MEAL_F, [r for r in _read(cfg.MEALS_CSV) if r["unit_id"] != uid])
-        _write(cfg.DSWD_CSV, DSWD_F, [r for r in _read(cfg.DSWD_CSV) if r["unit_id"] != uid])
+        _write(cfg.UNITS_CSV, [u for u in self.units() if u["id"] != uid])
+        for path in (cfg.MEALS_CSV, cfg.DSWD_CSV):
+            _write(path, [r for r in _read(path) if r["unit_id"] != uid])
         self.log(uid, "Unit deleted", "")
 
     # ---------- stock ----------
@@ -200,97 +257,79 @@ class DataManager:
                 for k, label in cfg.STOCK_ITEMS.items() if k in rows}
 
     def _save_stock(self, stock):
-        _write(cfg.STOCK_CSV, STOCK_F,
-               [{"key": k, "qty": v["qty"], "max": v["max"]} for k, v in stock.items()])
+        _write(cfg.STOCK_CSV, [{"key": k, "qty": v["qty"], "max": v["max"]} for k, v in stock.items()])
 
     def set_stock(self, key, qty, mx):
         stock = self.stock()
         o = stock[key]
-        if o["qty"] != qty or o["max"] != mx:
-            self.log("SYSTEM", "Stock edited",
-                     f"{o['label']}: {o['qty']}/{o['max']} -> {qty}/{mx}")
+        if (o["qty"], o["max"]) != (qty, mx):
+            self.log("SYSTEM", "Stock edited", f"{o['label']}: {o['qty']}/{o['max']} -> {qty}/{mx}")
             stock[key].update(qty=qty, max=mx)
             self._save_stock(stock)
 
     # ---------- distribution state ----------
     def today_state(self):
-        t = today()
+        t, cycle = today(), self.cycle_days()
         meals = {(r["unit_id"], r["meal"]): r for r in _read(cfg.MEALS_CSV) if r["date"] == t}
         dswd = {r["unit_id"]: r["received_date"] for r in _read(cfg.DSWD_CSV)}
-        cycle = self.cycle_days()
         state = {}
         for u in self.units():
-            uid = u["id"]
-            m = {}
-            for meal in cfg.MEALS:
-                r = meals.get((uid, meal))
-                m[meal] = {"status": r["status"] if r else "Pending",
-                           "ration": r["ration"] if r else "FFP",
-                           "qty": int(r["qty"]) if r else 0}
-            d = dswd.get(uid, "")
-            received, nxt = False, ""
-            if d:
-                dd = date.fromisoformat(d)
-                received = (date.today() - dd).days < cycle
-                nxt = (dd + timedelta(days=cycle)).isoformat()
-            state[uid] = {"meals": m, "dswd": {"received": received, "date": d, "next_due": nxt}}
+            uid, d = u["id"], dswd.get(u["id"], "")
+            state[uid] = {
+                "meals": {m: _meal(meals.get((uid, m))) for m in cfg.MEALS},
+                "dswd": {"received": _active(d, cycle), "date": d,
+                         "next_due": (date.fromisoformat(d) + timedelta(days=cycle)).isoformat() if d else ""}}
         return state
 
     def set_meal(self, uid, meal, status, ration):
         """Mark a meal Received/Pending for today. Adjusts stock. Returns (ok, message)."""
         t = today()
         rows = _read(cfg.MEALS_CSV)
-        cur = next((r for r in rows if r["unit_id"] == uid and r["date"] == t and r["meal"] == meal), None)
+        cur = next((r for r in rows if (r["unit_id"], r["date"], r["meal"]) == (uid, t, meal)), None)
         if (cur is None and status == "Pending") or \
            (cur and cur["status"] == status and (status != "Received" or cur["ration"] == ration)):
             return True, ""
         unit = next(u for u in self.units() if u["id"] == uid)
         stock = self.stock()
-        if cur and cur["status"] == "Received":
+        if cur and cur["status"] == "Received" and cur["ration"] in stock:
             stock[cur["ration"]]["qty"] += int(cur["qty"])
         qty = 0
         if status == "Received":
             qty = unit["headcount"]
             if qty <= 0:
                 return False, "No evacuees registered in this unit."
-            have = stock[ration]["qty"]
-            if have < qty:
-                return False, f"Not enough {stock[ration]['label']} (need {qty}, have {have})."
-            stock[ration]["qty"] -= qty
+            if ration in stock:                 # FFP / hot meals are not counted
+                have = stock[ration]["qty"]
+                if have < qty:
+                    return False, f"Not enough {stock[ration]['label']} (need {qty}, have {have})."
+                stock[ration]["qty"] -= qty
         new = {"unit_id": uid, "date": t, "meal": meal, "status": status, "ration": ration, "qty": qty}
         if cur:
             cur.update({k: str(v) for k, v in new.items()})
         else:
             rows.append(new)
-        _write(cfg.MEALS_CSV, MEAL_F, rows)
+        _write(cfg.MEALS_CSV, rows)
         self._save_stock(stock)
-        detail = (f"{meal}: Received - {cfg.RATIONS[ration]} x{qty}" if status == "Received"
-                  else f"{meal}: reverted to Pending (stock returned)")
-        self.log(uid, "Meal update", detail)
+        self.log(uid, "Meal update", f"{meal}: Received - {cfg.RATIONS[ration]} x{qty}" if status == "Received"
+                 else f"{meal}: reverted to Pending (stock returned)")
         return True, ""
 
     def set_dswd(self, uid, received):
         rows = _read(cfg.DSWD_CSV)
         cur = next((r for r in rows if r["unit_id"] == uid), None)
-        cycle = self.cycle_days()
-        active = bool(cur and cur["received_date"] and
-                      (date.today() - date.fromisoformat(cur["received_date"])).days < cycle)
-        if received == active:
+        if received == _active(cur["received_date"] if cur else "", self.cycle_days()):
             return True, ""
         stock = self.stock()
         if received:
             if stock["DSWD"]["qty"] < 1:
                 return False, "No DSWD relief packs left in stock."
-            stock["DSWD"]["qty"] -= 1
-            d = today()
-        else:
-            stock["DSWD"]["qty"] += 1
-            d = ""
+        stock["DSWD"]["qty"] += -1 if received else 1
+        d = today() if received else ""
         if cur:
             cur["received_date"] = d
         else:
             rows.append({"unit_id": uid, "received_date": d})
-        _write(cfg.DSWD_CSV, DSWD_F, rows)
+        _write(cfg.DSWD_CSV, rows)
         self._save_stock(stock)
         self.log(uid, "DSWD pack", "Received" if received else "Reverted to Not received")
         return True, ""
@@ -298,14 +337,14 @@ class DataManager:
     # ---------- logs ----------
     def log(self, unit_id, action, details=""):
         now = datetime.now()
+        _cache.pop(cfg.LOGS_CSV, None)
         with open(cfg.LOGS_CSV, "a", newline="", encoding="utf-8") as f:
-            csv.DictWriter(f, fieldnames=LOG_F).writerow({
+            csv.DictWriter(f, fieldnames=FIELDS[cfg.LOGS_CSV]).writerow({
                 "timestamp": now.strftime("%Y-%m-%d %H:%M:%S"), "date": now.date().isoformat(),
                 "unit_id": unit_id, "action": action, "details": details})
 
     def log_dates(self):
-        dates = {r["date"] for r in _read(cfg.LOGS_CSV)} | {today()}
-        return sorted(dates, reverse=True)
+        return sorted({r["date"] for r in _read(cfg.LOGS_CSV)} | {today()}, reverse=True)
 
     def logs_for(self, day):
         return [r for r in reversed(_read(cfg.LOGS_CSV)) if r["date"] == day]
@@ -314,15 +353,14 @@ class DataManager:
     def daily_reset(self):
         """Meals reset automatically (records are per-date). Here we log it once a day
         and clear DSWD records whose resupply cycle has ended."""
-        t = today()
-        if any(r["unit_id"] == "SYSTEM" and r["date"] == t and r["action"] == "Daily reset"
+        if any((r["unit_id"], r["date"], r["action"]) == ("SYSTEM", today(), "Daily reset")
                for r in _read(cfg.LOGS_CSV)):
             return
         cycle = self.cycle_days()
         rows = _read(cfg.DSWD_CSV)
         for r in rows:
-            if r["received_date"] and (date.today() - date.fromisoformat(r["received_date"])).days >= cycle:
+            if r["received_date"] and not _active(r["received_date"], cycle):
                 self.log(r["unit_id"], "DSWD reset", f"Cycle ended (received {r['received_date']})")
                 r["received_date"] = ""
-        _write(cfg.DSWD_CSV, DSWD_F, rows)
+        _write(cfg.DSWD_CSV, rows)
         self.log("SYSTEM", "Daily reset", "Breakfast / Lunch / Dinner distribution status reset")

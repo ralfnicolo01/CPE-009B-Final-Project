@@ -4,13 +4,8 @@ from pathlib import Path
 BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = BASE_DIR / "data"
 
-USERS_CSV = DATA_DIR / "users.csv"
-UNITS_CSV = DATA_DIR / "units.csv"
-STOCK_CSV = DATA_DIR / "stock.csv"
-MEALS_CSV = DATA_DIR / "meals.csv"
-DSWD_CSV = DATA_DIR / "dswd.csv"
-LOGS_CSV = DATA_DIR / "logs.csv"
-SETTINGS_CSV = DATA_DIR / "settings.csv"
+USERS_CSV, UNITS_CSV, STOCK_CSV, MEALS_CSV, DSWD_CSV, LOGS_CSV, SETTINGS_CSV = (
+    DATA_DIR / f"{n}.csv" for n in ("users", "units", "stock", "meals", "dswd", "logs", "settings"))
 
 MODALITIES = ("Tent", "Classroom")
 MEALS = ("Breakfast", "Lunch", "Dinner")
@@ -22,15 +17,16 @@ RATIONS = {
     "HOT": "3. Hot Meal (Lomi / Soup / Rice)",
 }
 
-# Stock items shown on the dashboard
+# Counted stock items (FFP and hot meals are still ration choices, but are not tracked in stock)
 STOCK_ITEMS = {
-    "FFP": "Family Food Packs (FFPs)",
     "RTEF": "Ready-to-Eat Food (RTEF) / Breakfast & Meal Packs",
-    "HOT": "Hot Meals (Lomi, Soup, Rice Meals)",
     "DSWD": "DSWD Relief Packs",
 }
-DEFAULT_STOCK = {"FFP": (500, 500), "RTEF": (500, 500), "HOT": (300, 300), "DSWD": (200, 200)}
+DEFAULT_STOCK = {"RTEF": (500, 500), "DSWD": (200, 200)}
 
 DEFAULT_DSWD_CYCLE_DAYS = 3
 DEFAULT_GRID = (6, 4)   # columns, rows of the shelter layout grid
 DEFAULT_ADMIN = ("admin", "admin123")
+DEFAULT_PASSWORD = "changeme"   # given to old hashed accounts when upgrading (their real password is unrecoverable)
+ROLES = ("Administrator", "DSWD Personnel", "Barangay Assistant", "Teacher", "Health Worker", "Volunteer")
+# Only ROLES[0] (Administrator) can open the Users page

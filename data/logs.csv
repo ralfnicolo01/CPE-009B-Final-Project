@@ -1,0 +1,29 @@
+timestamp,date,unit_id,action,details
+2026-10-27 18:58:56,2026-10-27,SYSTEM,Daily reset,Breakfast / Lunch / Dinner distribution status reset
+2026-10-27 18:59:05,2026-10-27,SYSTEM,Admin login,admin
+2026-10-27 18:59:26,2026-10-27,SYSTEM,Admin login,admin
+2026-10-27 19:01:09,2026-10-27,T-001,Unit added,"Tent at dsds, capacity 10, cell column 1 / row 1"
+2026-10-27 19:01:11,2026-10-27,T-001,Unit moved,to column 3 / row 1
+2026-10-27 19:01:32,2026-10-27,T-001,Unit edited,modality: Tent -> Classroom; headcount: 0 -> 3
+2026-10-27 19:01:32,2026-10-27,T-001,DSWD pack,Received
+2026-10-27 19:02:11,2026-10-27,SYSTEM,Admin login,admin
+2026-10-27 19:02:31,2026-10-27,SYSTEM,Setting changed,Grid: 6x4 -> 10x8
+2026-10-27 19:09:31,2026-10-27,SYSTEM,Admin login,admin
+2026-10-27 19:09:51,2026-10-27,SYSTEM,Setting changed,Grid: 10x8 -> 4x5
+2026-10-27 19:09:59,2026-10-27,SYSTEM,Setting changed,Grid: 4x5 -> 10x12
+2026-10-27 19:12:22,2026-10-27,SYSTEM,Admin login,admin
+2026-10-27 19:12:30,2026-10-27,SYSTEM,Setting changed,Grid: 10x12 -> 9x2
+2026-10-27 19:12:34,2026-10-27,SYSTEM,Setting changed,Grid: 9x2 -> 8x3
+2026-10-27 19:12:41,2026-10-27,SYSTEM,Setting changed,Grid: 8x3 -> 12x12
+2026-10-27 19:12:46,2026-10-27,T-001,Unit moved,to column 4 / row 1
+2026-10-27 19:16:56,2026-10-27,SYSTEM,Admin login,admin
+2026-10-27 19:20:38,2026-10-27,T-001,DSWD pack,Reverted to Not received
+2026-10-27 19:20:41,2026-10-27,T-001,Meal update,Breakfast: Received - 1. Family Food Pack (FFP) x3
+2026-10-27 19:21:11,2026-10-27,SYSTEM,Admin login,admin
+2026-10-27 19:25:36,2026-10-27,SYSTEM,Admin login,admin
+2026-10-27 19:26:14,2026-10-27,T-001,Unit moved,to column 3 / row 1
+2026-10-27 19:26:15,2026-10-27,SYSTEM,Setting changed,Grid: 12x12 -> 3x12
+2026-10-27 19:27:24,2026-10-27,SYSTEM,Setting changed,Grid: 3x12 -> 6x12
+2026-10-27 19:27:29,2026-10-27,SYSTEM,Setting changed,Grid: 6x12 -> 6x8
+2026-10-27 19:27:31,2026-10-27,SYSTEM,Setting changed,Grid: 6x8 -> 8x8
+2026-10-27 19:33:54,2026-10-27,SYSTEM,Admin login,admin
