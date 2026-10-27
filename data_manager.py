@@ -1,5 +1,7 @@
 """All CSV reading/writing and business rules live here (no UI code)."""
 import csv
+import json
+import uuid
 from datetime import date, datetime, timedelta
 
 import config as cfg
@@ -8,8 +10,8 @@ FIELDS = {
     cfg.USERS_CSV: ["username", "password", "role"],
     cfg.UNITS_CSV: ["id", "location", "modality", "capacity", "family_name", "headcount", "col", "row"],
     cfg.STOCK_CSV: ["key", "qty", "max"],
-    cfg.MEALS_CSV: ["unit_id", "date", "meal", "status", "ration", "qty"],
-    cfg.DSWD_CSV: ["unit_id", "received_date"],
+    cfg.MEALS_CSV: ["unit_id", "date", "meal", "status", "ration", "qty", "member_id"],
+    cfg.DSWD_CSV: ["unit_id", "received_date", "family_id"],
     cfg.LOGS_CSV: ["timestamp", "date", "unit_id", "action", "details"],
     cfg.SETTINGS_CSV: ["key", "value"],
 }
@@ -203,10 +205,61 @@ class DataManager:
         _write(cfg.UNITS_CSV, rows)
 
     def units(self):
-        return [{**r, **{k: int(r[k]) for k in INT_FIELDS}} for r in _read(cfg.UNITS_CSV)]
+        result = []
+        for raw in _read(cfg.UNITS_CSV):
+            u = {**raw, **{k: int(raw[k]) for k in INT_FIELDS}}
+            try:
+                families = json.loads(raw.get("family_name", ""))
+            except (TypeError, json.JSONDecodeError):
+                families = None  # added: distinguish legacy text from a parsed family list
+            if isinstance(families, list):
+                u["families"] = families
+                u["family_name"] = ", ".join(f.get("family_name", "") for f in families)
+            else:
+                u["families"] = []
+            result.append(u)
+        return result
+
+    def families(self, uid):
+        raw = next((r for r in _read(cfg.UNITS_CSV) if r["id"] == uid), None)
+        if not raw:
+            return []
+        try:
+            data = json.loads(raw.get("family_name", ""))
+            if isinstance(data, list):
+                changed = False
+                for family in data:
+                    if not family.get("id"):
+                        family["id"] = uuid.uuid4().hex[:12]; changed = True
+                    if not isinstance(family.get("members"), list):
+                        family["members"] = []
+                        for i in range(int(family.get("headcount", 0) or 0)):
+                            family["members"].append({"name": f"Member {i + 1}", "age": "", "barangay": ""})
+                        changed = True
+                    for i, member in enumerate(family["members"]):
+                        if not member.get("id"):
+                            member["id"] = uuid.uuid4().hex[:12]; changed = True
+                        member.setdefault("name", member.get("full_name", f"Member {i + 1}"))
+                        member.setdefault("age", "")
+                        member.setdefault("barangay", "")
+                if changed:
+                    self.update_unit(uid, {"families": data})
+                return data
+        except (TypeError, json.JSONDecodeError):
+            pass
+        # Upgrade legacy family/headcount fields without losing the old occupant count.
+        name = raw.get("family_name", "").strip()
+        count = int(raw.get("headcount", 0) or 0)
+        if not name and not count:
+            return []
+        family = {"id": uuid.uuid4().hex[:12], "family_name": name or "Legacy family", "members": []}
+        for i in range(count):
+            family["members"].append({"id": uuid.uuid4().hex[:12], "name": f"Member {i + 1}", "age": "", "barangay": ""})
+        self.update_unit(uid, {"families": [family]})
+        return [family]
 
     def add_unit(self, location, modality, capacity, col, row, family_name="", headcount=0) -> str:
-        units = self.units()
+        units = _read(cfg.UNITS_CSV)
         prefix = "T" if modality == "Tent" else "C"
         nums = [int(u["id"].split("-")[1]) for u in units if u["id"].startswith(prefix + "-")]
         uid = f"{prefix}-{max(nums, default=0) + 1:03d}"
@@ -219,12 +272,24 @@ class DataManager:
 
     def update_unit(self, uid, fields):
         """fields: location, family_name, modality, capacity, headcount (any subset)."""
-        units = self.units()
+        units = _read(cfg.UNITS_CSV)
         u = next((x for x in units if x["id"] == uid), None)
         if not u:
             return False
-        changes = [f"{k}: {u[k]} -> {v}" for k, v in fields.items() if u.get(k) != v]
-        u.update(fields)
+        changes = []
+        for k, v in fields.items():
+            if k == "families":
+                names = ", ".join(f.get("family_name", "") for f in v)
+                headcount = sum(len(f.get("members", [])) for f in v)
+                changes.append(f"families updated ({len(v)} families / {headcount} occupants)")
+                u["family_name"] = json.dumps(v, ensure_ascii=False)
+                u["headcount"] = headcount
+            elif k == "family_name" and "families" in fields:
+                # families is the structured source of truth; keep legacy display data out of CSV.
+                continue
+            elif k in FIELDS[cfg.UNITS_CSV] and u.get(k) != str(v):
+                changes.append(f"{k}: {u.get(k, '')} -> {v}")
+                u[k] = str(v)
         _write(cfg.UNITS_CSV, units)
         if changes:
             self.log(uid, "Unit edited", "; ".join(changes))
@@ -232,20 +297,20 @@ class DataManager:
 
     def move_unit(self, uid, col, row):
         """Move a unit to a cell; if the cell is taken, the two units swap places."""
-        units = self.units()
+        units = _read(cfg.UNITS_CSV)
         me = next((u for u in units if u["id"] == uid), None)
-        if not me or (me["col"], me["row"]) == (col, row):
+        if not me or (int(me["col"]), int(me["row"])) == (col, row):
             return
-        other = next((u for u in units if u["id"] != uid and (u["col"], u["row"]) == (col, row)), None)
+        other = next((u for u in units if u["id"] != uid and (int(u["col"]), int(u["row"])) == (col, row)), None)
         if other:
             other["col"], other["row"] = me["col"], me["row"]
-        me["col"], me["row"] = col, row
+        me["col"], me["row"] = str(col), str(row)
         _write(cfg.UNITS_CSV, units)
         self.log(uid, "Unit moved", f"to column {col + 1} / row {row + 1}"
                                     + (f" (swapped with {other['id']})" if other else ""))
 
     def delete_unit(self, uid):
-        _write(cfg.UNITS_CSV, [u for u in self.units() if u["id"] != uid])
+        _write(cfg.UNITS_CSV, [u for u in _read(cfg.UNITS_CSV) if u["id"] != uid])
         for path in (cfg.MEALS_CSV, cfg.DSWD_CSV):
             _write(path, [r for r in _read(path) if r["unit_id"] != uid])
         self.log(uid, "Unit deleted", "")
@@ -270,16 +335,98 @@ class DataManager:
     # ---------- distribution state ----------
     def today_state(self):
         t, cycle = today(), self.cycle_days()
-        meals = {(r["unit_id"], r["meal"]): r for r in _read(cfg.MEALS_CSV) if r["date"] == t}
-        dswd = {r["unit_id"]: r["received_date"] for r in _read(cfg.DSWD_CSV)}
+        meal_rows = [r for r in _read(cfg.MEALS_CSV) if r["date"] == t]
+        dswd_rows = _read(cfg.DSWD_CSV)
         state = {}
         for u in self.units():
-            uid, d = u["id"], dswd.get(u["id"], "")
+            uid = u["id"]
+            active_member_ids = {m["id"] for f in u["families"] for m in f.get("members", []) if m.get("id")}
+            unit_meals = {}
+            for m in cfg.MEALS:
+                rows = [r for r in meal_rows if r["unit_id"] == uid and r["meal"] == m]
+                legacy = next((r for r in rows if not r.get("member_id")), None)
+                members = [r for r in rows if r.get("member_id") in active_member_ids]
+                if legacy and not members:
+                    unit_meals[m] = _meal(legacy)
+                else:
+                    count = sum(1 for r in members if r["status"] == "Received")
+                    ration = members[0]["ration"] if members else "FFP"
+                    unit_meals[m] = {"status": "Received" if count > 0 and count == u["headcount"] else "Pending",
+                                     "ration": ration, "qty": count}
+            # Older saved family JSON has no IDs; UnitDialog upgrades it when opened.
+            family_ids = {f.get("id") for f in u["families"] if f.get("id")}  # added: skip older families without IDs
+            fam_dswd = [r for r in dswd_rows if r["unit_id"] == uid and r.get("family_id") in family_ids]
+            active_dates = [r["received_date"] for r in fam_dswd if _active(r.get("received_date", ""), cycle)]
+            legacy = next((r for r in dswd_rows if r["unit_id"] == uid and not r.get("family_id")), None)
+            d = max(active_dates, default=legacy["received_date"] if legacy else "")
             state[uid] = {
-                "meals": {m: _meal(meals.get((uid, m))) for m in cfg.MEALS},
+                "meals": unit_meals,
                 "dswd": {"received": _active(d, cycle), "date": d,
                          "next_due": (date.fromisoformat(d) + timedelta(days=cycle)).isoformat() if d else ""}}
         return state
+
+    def set_member_meal(self, uid, member_id, meal, status, ration):
+        """Set today's ration for one evacuee, adjusting counted stock by one item."""
+        rows = _read(cfg.MEALS_CSV); t = today()
+        cur = next((r for r in rows if r.get("member_id") == member_id and r["date"] == t and r["meal"] == meal), None)
+        if cur and cur["status"] == status and (status != "Received" or cur["ration"] == ration):
+            return True, ""
+        stock = self.stock()
+        if cur and cur["status"] == "Received" and cur["ration"] in stock:
+            stock[cur["ration"]]["qty"] += int(cur["qty"] or 0)
+        qty = 1 if status == "Received" else 0
+        if qty and ration in stock:
+            if stock[ration]["qty"] < 1:
+                return False, f"No {stock[ration]['label']} left in stock."
+            stock[ration]["qty"] -= 1
+        record = {"unit_id": uid, "date": t, "meal": meal, "status": status,
+                  "ration": ration, "qty": qty, "member_id": member_id}
+        if cur:
+            cur.update({k: str(v) for k, v in record.items()})
+        else:
+            rows.append(record)
+        _write(cfg.MEALS_CSV, rows); self._save_stock(stock)
+        self.log(uid, "Meal update", f"{meal}: {status} for one member ({cfg.RATIONS[ration]})")
+        return True, ""
+
+    def member_meals_today(self, uid, member_id):
+        rows = [r for r in _read(cfg.MEALS_CSV) if r.get("unit_id") == uid and r.get("member_id") == member_id and r.get("date") == today()]
+        return {m: next((r for r in rows if r["meal"] == m), {"status": "Pending", "ration": "FFP"}) for m in cfg.MEALS}
+
+    def dswd_family_state(self, uid, family_id):
+        rows = _read(cfg.DSWD_CSV)
+        r = next((x for x in rows if x["unit_id"] == uid and x.get("family_id") == family_id), None)
+        if not r and self.families(uid) and self.families(uid)[0]["id"] == family_id:
+            r = next((x for x in rows if x["unit_id"] == uid and not x.get("family_id")), None)
+        d = r.get("received_date", "") if r else ""
+        cycle = self.cycle_days()
+        return {"received": _active(d, cycle), "date": d,
+                "next_due": (date.fromisoformat(d) + timedelta(days=cycle)).isoformat() if d else ""}
+
+    def set_dswd_family(self, uid, family_id, received):
+        rows = _read(cfg.DSWD_CSV)
+        cur = next((r for r in rows if r["unit_id"] == uid and r.get("family_id") == family_id), None)
+        migrated_legacy = False
+        if not cur and self.families(uid) and self.families(uid)[0]["id"] == family_id:
+            cur = next((r for r in rows if r["unit_id"] == uid and not r.get("family_id")), None)
+            if cur:
+                cur["family_id"] = family_id
+                migrated_legacy = True
+        if received == _active(cur.get("received_date", "") if cur else "", self.cycle_days()):
+            if migrated_legacy:
+                _write(cfg.DSWD_CSV, rows)
+            return True, ""
+        stock = self.stock()
+        if received and stock["DSWD"]["qty"] < 1:
+            return False, "No DSWD relief packs left in stock."
+        stock["DSWD"]["qty"] += -1 if received else 1
+        if cur:
+            cur["received_date"] = today() if received else ""
+        else:
+            rows.append({"unit_id": uid, "received_date": today() if received else "", "family_id": family_id})
+        _write(cfg.DSWD_CSV, rows); self._save_stock(stock)
+        self.log(uid, "DSWD family pack", f"{family_id}: " + ("Received" if received else "Reverted"))
+        return True, ""
 
     def set_meal(self, uid, meal, status, ration):
         """Mark a meal Received/Pending for today. Adjusts stock. Returns (ok, message)."""
