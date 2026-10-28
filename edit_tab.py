@@ -6,7 +6,6 @@ from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QGr
 from widgets import GridBoard, label, scroll_page
 from unit_dialog import UnitDialog
 
-
 class EditTab(QWidget):
     data_changed = pyqtSignal()
 

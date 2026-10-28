@@ -9,7 +9,6 @@ from PyQt6.QtWidgets import (QCheckBox, QComboBox, QDialog, QFormLayout, QGridLa
     QGroupBox, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMessageBox, QPushButton,
     QScrollArea, QSpinBox, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
 
-
 class UnitDialog(QDialog):
     def __init__(self, dm, uid=None, parent=None, pos=None, can_delete=False):
         super().__init__(parent)

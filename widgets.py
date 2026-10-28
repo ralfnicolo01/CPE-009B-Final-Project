@@ -8,10 +8,8 @@ from PyQt6.QtWidgets import (QAbstractButton, QApplication, QWidget, QFrame, QLa
 VACANT, PARTIAL, FULL = "#7bc496", "#f2b441", "#e56b5d"
 CENTER = Qt.AlignmentFlag.AlignCenter
 
-
 def occupancy_color(head, cap):
     return VACANT if head <= 0 else FULL if head >= cap else PARTIAL
-
 
 def label(text="", role="", center=False, rich=False):
     """QLabel styled by the theme through its `role` property (see styles.py)."""
@@ -24,7 +22,6 @@ def label(text="", role="", center=False, rich=False):
         lb.setTextFormat(Qt.TextFormat.RichText)
     return lb
 
-
 def scroll_page(owner):
     """Make `owner` a scrollable page and return the layout to fill."""
     outer = QVBoxLayout(owner); outer.setContentsMargins(0, 0, 0, 0)
@@ -34,7 +31,6 @@ def scroll_page(owner):
     outer.addWidget(scroll)
     root = QVBoxLayout(page); root.setContentsMargins(24, 8, 24, 24); root.setSpacing(16)
     return root
-
 
 class ToggleSwitch(QAbstractButton):
     """Slide switch: gray when off, blue when on, with a white knob that glides across."""
@@ -67,7 +63,6 @@ class ToggleSwitch(QAbstractButton):
         p.setBrush(QColor(0, 0, 0, 45)); p.drawEllipse(QRectF(x, r.top() + 4, d, d))     # soft shadow
         p.setBrush(QColor("white")); p.drawEllipse(QRectF(x, r.top() + 3, d, d))
 
-
 class UnitIcon(QWidget):
     """Tent / classroom icon drawn with QPainter (no image files needed)."""
     def __init__(self, modality, color, size=64):
@@ -92,9 +87,7 @@ class UnitIcon(QWidget):
             for r in (box(.2, .5, .16, .14), box(.64, .5, .16, .14), box(.42, .62, .16, .26)):
                 p.drawRect(r)
 
-
 BASE_W, BASE_H = 164, 182      # design size of one grid cell; cards scale from this
-
 
 class UnitCard(QFrame):
     activated = pyqtSignal(str)
@@ -151,7 +144,6 @@ class UnitCard(QFrame):
         self._press = None
         self.activated.emit(self.uid)
 
-
 class Slot(QFrame):
     """One grid cell: placeholder when empty, holds a UnitCard when occupied."""
     clicked = pyqtSignal(int, int)          # empty cell clicked (edit mode)
@@ -196,7 +188,6 @@ class Slot(QFrame):
         self._hover(False)
         e.acceptProposedAction()
         self.dropped.emit(e.mimeData().text(), self.col, self.row)
-
 
 class GridBoard(QWidget):
     """cols x rows grid, centered. Cells grow or shrink so the whole grid fits the window
@@ -258,7 +249,6 @@ class GridBoard(QWidget):
     def showEvent(self, e):
         super().showEvent(e); self._timer.start()
 
-
 class StockBar(QWidget):
     def __init__(self, text):
         super().__init__()
@@ -275,7 +265,6 @@ class StockBar(QWidget):
         self.value.setText(f"{qty:,} / {mx:,} left  ({pct:.0%})")
         self.bar.setRange(0, mx); self.bar.setValue(min(qty, mx))
         self.bar.setStyleSheet(f"QProgressBar::chunk{{background:{color};border-radius:5px;}}")
-
 
 class CardIcon(QWidget):
     """Summary-card icon ('people', 'house', 'house_empty') painted in the theme accent color."""
@@ -308,7 +297,6 @@ class CardIcon(QWidget):
             p.setPen(Qt.PenStyle.NoPen if filled else QPen(c, 2.4))
             p.setBrush(c.lighter(185) if filled else Qt.BrushStyle.NoBrush)
             p.drawRect(box(.44, .6, .12, .2))                                         # door
-
 
 class SummaryCard(QFrame):
     def __init__(self, title, kind):

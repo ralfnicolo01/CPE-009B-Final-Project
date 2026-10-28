@@ -5,7 +5,6 @@ from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QGr
 from widgets import SummaryCard, StockBar, GridBoard, VACANT, PARTIAL, FULL, label, scroll_page
 from unit_dialog import UnitDialog
 
-
 class DashboardTab(QWidget):
     def __init__(self, dm):
         super().__init__()

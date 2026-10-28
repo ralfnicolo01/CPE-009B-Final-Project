@@ -74,6 +74,5 @@ QHeaderView::section { background: $head; border: none; padding: 6px; font-weigh
 QProgressBar { background: $track; border: none; border-radius: 5px; }
 """)
 
-
 def style(dark: bool) -> str:
     return _QSS.substitute(DARK if dark else LIGHT)

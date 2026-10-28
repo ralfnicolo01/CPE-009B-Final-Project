@@ -10,7 +10,6 @@ from users_tab import UsersTab
 from data_manager import today
 from widgets import label, ToggleSwitch
 
-
 class MainWindow(QMainWindow):
     logout_requested = pyqtSignal()
     theme_toggled = pyqtSignal(bool)

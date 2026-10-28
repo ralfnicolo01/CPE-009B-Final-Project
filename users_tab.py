@@ -6,13 +6,11 @@ from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QFormLayout, QGr
                              QMessageBox)
 from widgets import label, scroll_page
 
-
 def _cell(widget):
     """Wrap a cell widget with a little padding so it does not touch the cell borders."""
     box = QWidget(); lay = QHBoxLayout(box); lay.setContentsMargins(6, 5, 6, 5)
     lay.addWidget(widget)
     return box
-
 
 class UsersTab(QWidget):
     ROW_H = 44
