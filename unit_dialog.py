@@ -1,23 +1,21 @@
-"""Unit editor with family/member records and per-member meal distribution."""
+"""Unit editor for shelter and family/member registration."""
 import uuid
 
 import config as cfg
-from data_manager import today
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QIntValidator
-from PyQt6.QtWidgets import (QCheckBox, QComboBox, QDialog, QFormLayout, QGridLayout,
+from PyQt6.QtWidgets import (QComboBox, QDialog, QFormLayout, QGridLayout,
     QGroupBox, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMessageBox, QPushButton,
-    QScrollArea, QSpinBox, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
+    QScrollArea, QSpinBox, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget, QTextEdit)
+
 
 class UnitDialog(QDialog):
-    def __init__(self, dm, uid=None, parent=None, pos=None, can_delete=False):
+    def __init__(self, dm, uid=None, parent=None, pos=None, can_delete=False, initial_family_id=None):
         super().__init__(parent)
         self.dm, self.uid, self.pos = dm, uid, pos
         self.is_new = uid is None
         self.families_list = []
         self.selected_family_id = None
-        self.pending_distribution = {}
-        self._loading = False
         self.setWindowTitle("Add unit" if self.is_new else f"Edit unit {uid}")
         self.resize(900, 760); self.setMinimumSize(760, 600)
         outer = QVBoxLayout(self)
@@ -59,17 +57,16 @@ class UnitDialog(QDialog):
         addrow.addWidget(self.new_family, 1); addrow.addWidget(self.add_family_button); fam.addLayout(addrow)
         root.addWidget(self.family_box)
 
-        self.member_box = QGroupBox("Selected family — member registry and meal distribution")
+        self.member_box = QGroupBox("Selected family — registration")
         mb = QVBoxLayout(self.member_box)
         self.family_name = QLineEdit(); self.family_name.setPlaceholderText("Family name")
         mb.addWidget(self.family_name)
         self.family_barangay = QLineEdit(); self.family_barangay.setPlaceholderText("Family barangay")  # added: barangay belongs to the family
         mb.addWidget(self.family_barangay)
-        self.member_table = QTableWidget(0, 8)
-        self.member_table.setHorizontalHeaderLabels(["Full name", "Age", "Breakfast", "Ration", "Lunch", "Ration", "Dinner", "Ration"])
+        self.member_table = QTableWidget(0, 2)
+        self.member_table.setHorizontalHeaderLabels(["Full name", "Age"])
         self.member_table.horizontalHeader().setDefaultAlignment(Qt.AlignmentFlag.AlignCenter)  # added: center table headings
         for c in range(2): self.member_table.horizontalHeader().setSectionResizeMode(c, QHeaderView.ResizeMode.Stretch)
-        for c in range(2, 8): self.member_table.horizontalHeader().setSectionResizeMode(c, QHeaderView.ResizeMode.ResizeToContents)
         self.member_table.verticalHeader().hide(); self.member_table.setMinimumHeight(150)
         mb.addWidget(self.member_table)
         controls = QGridLayout()
@@ -79,11 +76,17 @@ class UnitDialog(QDialog):
         controls.addWidget(self.member_name, 0, 0); controls.addWidget(self.member_age, 0, 1)
         controls.addWidget(self.add_member_button, 0, 2)
         mb.addLayout(controls)
+        batch = QHBoxLayout()
+        self.member_batch = QTextEdit(); self.member_batch.setPlaceholderText(
+            "Quick add: paste one person per line as Full Name, Age\nExample: Maria Santos, 34")
+        self.member_batch.setMaximumHeight(82)
+        self.add_batch_button = QPushButton("Add list")
+        self.add_batch_button.setProperty("variant", "secondary")
+        self.add_batch_button.clicked.connect(self._add_member_batch)
+        batch.addWidget(self.member_batch, 1); batch.addWidget(self.add_batch_button)
+        mb.addLayout(batch)
         self.remove_member_button = QPushButton("Remove selected member")
         self.remove_member_button.clicked.connect(self._remove_member); mb.addWidget(self.remove_member_button)
-        self.dswd_check = QCheckBox("This family received one DSWD relief pack in the current cycle")
-        self.dswd_info = QLabel(); mb.addWidget(self.dswd_check); mb.addWidget(self.dswd_info)
-        mb.addWidget(QLabel("Tick a meal beside each member who received it. Stock is counted per person."))
         root.addWidget(self.member_box)
 
         buttons = QHBoxLayout()
@@ -98,7 +101,8 @@ class UnitDialog(QDialog):
         self._refresh_family_table()
         self._modality_changed(self.modality.currentText())  # added: apply tent limits on initial open too
         if self.families_list:
-            self._select_family(self.families_list[0]["id"])
+            family_id = initial_family_id if any(f["id"] == initial_family_id for f in self.families_list) else self.families_list[0]["id"]
+            self._select_family(family_id)
         else:
             self.member_box.setEnabled(False)
 
@@ -151,7 +155,6 @@ class UnitDialog(QDialog):
     def _select_family(self, family_id):
         if self.selected_family_id and self.selected_family_id != family_id:
             self._sync_selected_family()
-            self._remember_family_distribution(self.selected_family_id)
         self.selected_family_id = family_id
         family = next((f for f in self.families_list if f["id"] == family_id), None)
         if not family: self.member_box.setEnabled(False); return
@@ -159,35 +162,16 @@ class UnitDialog(QDialog):
         inherited_barangay = next((m.get("barangay", "") for m in family.get("members", []) if m.get("barangay")), "")
         self.family_barangay.setText(family.get("barangay", inherited_barangay))  # added: migrate an existing shared barangay
         self._refresh_member_table()
-        state = self.dm.dswd_family_state(self.uid, family_id) if not self.is_new else {"received": False, "date": "", "next_due": ""}
-        pending = self.pending_distribution.get(family_id, {})
-        self.dswd_check.setChecked(pending.get("dswd", state["received"]))
-        self.dswd_info.setText(f"Last received: {state['date']} · Next due: {state['next_due']}" if state["date"] else "No pack recorded in this cycle.")
 
     def _refresh_member_table(self):
         family = next((f for f in self.families_list if f["id"] == self.selected_family_id), None)
         members = family.get("members", []) if family else []
-        self._loading = True; self.member_table.setRowCount(len(members))
+        self.member_table.setRowCount(len(members))
         for row, member in enumerate(members):
             for col, value in enumerate((member.get("name", ""), member.get("age", ""))):
                 item = QTableWidgetItem(str(value)); item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
                 self.member_table.setItem(row, col, item)
-            state = self.dm.member_meals_today(self.uid, member["id"]) if not self.is_new else {}
-            pending = self.pending_distribution.get(self.selected_family_id, {}).get("members", {}).get(member["id"], {})
-            for index, meal in enumerate(cfg.MEALS):
-                j = 2 + index * 2
-                saved = pending.get(meal, {})
-                check = QCheckBox(); check.setChecked(saved.get("received", state.get(meal, {}).get("status") == "Received"))
-                self.member_table.setCellWidget(row, j, check)
-                ration = QComboBox()
-                for key, title in cfg.RATIONS.items():
-                    ration.addItem(title, key)
-                    ration.setItemData(ration.count() - 1, Qt.AlignmentFlag.AlignCenter, Qt.ItemDataRole.TextAlignmentRole)
-                ration.setEditable(True); ration.lineEdit().setReadOnly(True)
-                ration.lineEdit().setAlignment(Qt.AlignmentFlag.AlignCenter)  # added: center selected ration text
-                ix = ration.findData(saved.get("ration", state.get(meal, {}).get("ration", "FFP"))); ration.setCurrentIndex(max(ix, 0))
-                self.member_table.setCellWidget(row, j + 1, ration)
-        self._loading = False
+    
 
     def _sync_selected_family(self):
         family = next((f for f in self.families_list if f["id"] == self.selected_family_id), None)
@@ -198,48 +182,12 @@ class UnitDialog(QDialog):
             member["name"] = self.member_table.item(row, 0).text().strip() if self.member_table.item(row, 0) else ""
             member["age"] = self.member_table.item(row, 1).text().strip() if self.member_table.item(row, 1) else ""
 
-    def _remember_family_distribution(self, family_id):
-        if not family_id:
-            return
-        family = next((f for f in self.families_list if f["id"] == family_id), None)
-        if not family:
-            return
-        data = {"dswd": self.dswd_check.isChecked(), "members": {}}
-        for row, member in enumerate(family.get("members", [])):
-            data["members"][member["id"]] = {}
-            for index, meal in enumerate(cfg.MEALS):
-                col = 2 + index * 2
-                check = self.member_table.cellWidget(row, col)
-                if check is None:
-                    continue
-                ration_box = self.member_table.cellWidget(row, col + 1)
-                data["members"][member["id"]][meal] = {"received": check.isChecked(), "ration": ration_box.currentData()}
-        self.pending_distribution[family_id] = data
-
-    def _apply_pending_distribution(self):
-        if self.is_new:
-            return
-        errors = []
-        active_families = {f["id"]: f for f in self.families_list}
-        for family_id, data in self.pending_distribution.items():
-            if family_id not in active_families:
-                continue
-            family = active_families[family_id]
-            for member in family.get("members", []):
-                for meal, value in data.get("members", {}).get(member["id"], {}).items():
-                    ok, msg = self.dm.set_member_meal(self.uid, member["id"], meal,
-                        "Received" if value["received"] else "Pending", value["ration"])
-                    if not ok: errors.append(f"{member['name']} / {meal}: {msg}")
-            ok, msg = self.dm.set_dswd_family(self.uid, family_id, data.get("dswd", False))
-            if not ok: errors.append(f"{family['family_name']} / DSWD: {msg}")
-        if errors: QMessageBox.warning(self, "Saved with distribution issues", "\n".join(errors))
-
     def _add_family(self):
         name = self.new_family.text().strip()
         if not name: QMessageBox.warning(self, "Family name required", "Enter a family name first."); return
         if self.modality.currentText() == "Tent" and self.families_list:
             QMessageBox.warning(self, "Tent limit", "A tent can contain only one family."); return
-        self._sync_selected_family(); self._remember_family_distribution(self.selected_family_id)
+        self._sync_selected_family()
         family = {"id": uuid.uuid4().hex[:12], "family_name": name, "barangay": "", "members": []}  # added
         self.families_list.append(family); self.new_family.clear()
         self.family_search.clear(); self._refresh_family_table()
@@ -248,8 +196,7 @@ class UnitDialog(QDialog):
 
     def _remove_family(self, family_id):
         if family_id == self.selected_family_id:
-            self._sync_selected_family(); self._remember_family_distribution(family_id)
-        self.pending_distribution.pop(family_id, None)
+            self._sync_selected_family()
         self.families_list = [f for f in self.families_list if f["id"] != family_id]
         self.selected_family_id = None; self._refresh_family_table()
         self._modality_changed(self.modality.currentText())  # added: allow one replacement family in an empty tent
@@ -257,7 +204,7 @@ class UnitDialog(QDialog):
         else: self.member_box.setEnabled(False)
 
     def _add_member(self):
-        self._sync_selected_family(); self._remember_family_distribution(self.selected_family_id)
+        self._sync_selected_family()
         name = self.member_name.text().strip()
         if not name: QMessageBox.warning(self, "Name required", "Enter the member's full name."); return
         family = next(f for f in self.families_list if f["id"] == self.selected_family_id)
@@ -270,13 +217,45 @@ class UnitDialog(QDialog):
         self.member_name.clear(); self.member_age.clear()
         self._refresh_member_table(); self._refresh_family_table()
 
+    def _add_member_batch(self):
+        family = next((f for f in self.families_list if f["id"] == self.selected_family_id), None)
+        if not family:
+            QMessageBox.information(self, "Select a family", "Select or add a family before adding members.")
+            return
+        lines = [line.strip() for line in self.member_batch.toPlainText().splitlines() if line.strip()]
+        if not lines:
+            QMessageBox.information(self, "List is empty", "Enter one person per line as Full Name, Age.")
+            return
+        parsed, invalid = [], []
+        for line_no, line in enumerate(lines, start=1):
+            parts = line.rsplit(",", 1)
+            if len(parts) != 2 or not parts[0].strip() or not parts[1].strip().isdigit():
+                invalid.append(str(line_no)); continue
+            age = int(parts[1].strip())
+            if age > 120:
+                invalid.append(str(line_no)); continue
+            parsed.append({"id": uuid.uuid4().hex[:12], "name": parts[0].strip(), "age": str(age)})
+        remaining = self.capacity.value() - sum(len(f.get("members", [])) for f in self.families_list)
+        if len(parsed) > remaining:
+            QMessageBox.warning(self, "Capacity exceeded", f"Only {remaining} more member(s) fit in this unit.")
+            return
+        if not parsed:
+            QMessageBox.warning(self, "Check the list", "Each line must be Full Name, Age (0–120).")
+            return
+        self._sync_selected_family()
+        family["members"].extend(parsed)
+        self.member_batch.clear()
+        self._refresh_member_table(); self._refresh_family_table()
+        if invalid:
+            QMessageBox.warning(self, "Some lines were skipped",
+                                "Added valid entries. Check line(s): " + ", ".join(invalid))
+
     def _remove_member(self):
         row = self.member_table.currentRow()
         family = next((f for f in self.families_list if f["id"] == self.selected_family_id), None)
         if family and 0 <= row < len(family["members"]):
-            self._sync_selected_family(); self._remember_family_distribution(self.selected_family_id)
+            self._sync_selected_family()
             removed = family["members"].pop(row)
-            self.pending_distribution.get(self.selected_family_id, {}).get("members", {}).pop(removed["id"], None)
             self._refresh_member_table(); self._refresh_family_table()
 
     def save(self):
@@ -305,9 +284,6 @@ class UnitDialog(QDialog):
             self.dm.update_unit(self.uid, fields)
         else:
             self.dm.update_unit(self.uid, fields)
-        if not self.is_new:
-            self._remember_family_distribution(self.selected_family_id)
-            self._apply_pending_distribution()
         self.accept()
 
     def delete(self):
