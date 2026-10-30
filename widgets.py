@@ -8,8 +8,10 @@ from PyQt6.QtWidgets import (QAbstractButton, QApplication, QWidget, QFrame, QLa
 VACANT, PARTIAL, FULL = "#7bc496", "#f2b441", "#e56b5d"
 CENTER = Qt.AlignmentFlag.AlignCenter
 
+
 def occupancy_color(head, cap):
     return VACANT if head <= 0 else FULL if head >= cap else PARTIAL
+
 
 def label(text="", role="", center=False, rich=False):
     """QLabel styled by the theme through its `role` property (see styles.py)."""
@@ -22,6 +24,7 @@ def label(text="", role="", center=False, rich=False):
         lb.setTextFormat(Qt.TextFormat.RichText)
     return lb
 
+
 def scroll_page(owner):
     """Make `owner` a scrollable page and return the layout to fill."""
     outer = QVBoxLayout(owner); outer.setContentsMargins(0, 0, 0, 0)
@@ -31,6 +34,7 @@ def scroll_page(owner):
     outer.addWidget(scroll)
     root = QVBoxLayout(page); root.setContentsMargins(24, 8, 24, 24); root.setSpacing(16)
     return root
+
 
 class ToggleSwitch(QAbstractButton):
     """Slide switch: gray when off, blue when on, with a white knob that glides across."""
@@ -63,6 +67,7 @@ class ToggleSwitch(QAbstractButton):
         p.setBrush(QColor(0, 0, 0, 45)); p.drawEllipse(QRectF(x, r.top() + 4, d, d))     # soft shadow
         p.setBrush(QColor("white")); p.drawEllipse(QRectF(x, r.top() + 3, d, d))
 
+
 class UnitIcon(QWidget):
     """Tent / classroom icon drawn with QPainter (no image files needed)."""
     def __init__(self, modality, color, size=64):
@@ -87,21 +92,31 @@ class UnitIcon(QWidget):
             for r in (box(.2, .5, .16, .14), box(.64, .5, .16, .14), box(.42, .62, .16, .26)):
                 p.drawRect(r)
 
+
 BASE_W, BASE_H = 164, 182      # design size of one grid cell; cards scale from this
+
 
 class UnitCard(QFrame):
     activated = pyqtSignal(str)
 
-    def __init__(self, unit, state, w=BASE_W, h=BASE_H, draggable=False):
+    def __init__(self, unit, state, w=BASE_W, h=BASE_H, draggable=False,
+                 show_distribution=True, show_location=True):
         super().__init__()
         self.setObjectName("unitCard"); self.setFixedSize(w, h)
         self.uid, self.draggable, self._press = unit["id"], draggable, None
         s = w / BASE_W
         occupied = unit["headcount"] > 0
-        name = unit["family_name"] if occupied and unit["family_name"] else "Vacant"
+        if show_location:
+            name = unit.get("location", "").strip() or unit["id"]
+        else:
+            name = unit["family_name"] if occupied and unit.get("family_name") else "Vacant"
+        families = unit.get("family_name", "")
         hint = ("Drag to move  ·  Double-click to edit" if draggable
-                else "Double-click to edit unit / update food status")
-        self.setToolTip(f"{name}\n{unit['location']}\n{hint}")
+                else "Double-click to edit registration details")
+        details = f"{name}\n{unit['modality']} · {unit['id']}"
+        if families:
+            details += f"\nFamilies: {families}"
+        self.setToolTip(f"{details}\n{hint}")
 
         dpx = max(9, round(15 * s))     # status dots are drawn larger than the letters
         dot = lambda ok: f'<span style="color:{"#22a06b" if ok else "#9aa0ad"};font-size:{dpx}px">●</span>'
@@ -112,7 +127,9 @@ class UnitCard(QFrame):
         lay = QVBoxLayout(self); lay.setContentsMargins(*[round(8 * s)] * 4); lay.setSpacing(round(3 * s))
         parts = [(label(elided, "name" if occupied else "nameoff", True), 13),
                  (label(f"{unit['headcount']}/{unit['capacity']}", "count", True), 13),
-                 (label(unit["id"], "id", True), 11), (label(txt, "tiny", True, True), 12)]
+                 (label(unit["id"], "id", True), 11)]
+        if show_distribution:
+            parts.append((label(txt, "tiny", True, True), 12))
         for lb, size in parts:                      # scale fonts with the cell
             lb.setStyleSheet(f"font-size:{max(7, round(size * s))}px;")
         icon = UnitIcon(unit["modality"], occupancy_color(unit["headcount"], unit["capacity"]), max(24, round(64 * s)))
@@ -143,6 +160,7 @@ class UnitCard(QFrame):
     def mouseDoubleClickEvent(self, e):
         self._press = None
         self.activated.emit(self.uid)
+
 
 class Slot(QFrame):
     """One grid cell: placeholder when empty, holds a UnitCard when occupied."""
@@ -189,6 +207,7 @@ class Slot(QFrame):
         e.acceptProposedAction()
         self.dropped.emit(e.mimeData().text(), self.col, self.row)
 
+
 class GridBoard(QWidget):
     """cols x rows grid, centered. Cells grow or shrink so the whole grid fits the window
     (width and height). Same widget is used in the Edit tab (editable) and Dashboard (view)."""
@@ -197,9 +216,11 @@ class GridBoard(QWidget):
     slot_clicked = pyqtSignal(int, int)
     unit_moved = pyqtSignal(str, int, int)
 
-    def __init__(self, editable=False):
+    def __init__(self, editable=False, show_distribution=True, show_location=True):
         super().__init__()
         self.editable = editable
+        self.show_distribution = show_distribution
+        self.show_location = show_location
         self._data = self._cell = None
         self.grid = QGridLayout(self)
         self.grid.setSpacing(self.SP); self.grid.setContentsMargins(*[self.PAD] * 4)
@@ -230,7 +251,9 @@ class GridBoard(QWidget):
                 slot = Slot(c, r, self.editable, cw, ch)
                 slot.clicked.connect(self.slot_clicked); slot.dropped.connect(self.unit_moved)
                 if (u := at.get((c, r))):
-                    card = UnitCard(u, state[u["id"]], cw, ch, draggable=self.editable)
+                    card = UnitCard(u, state[u["id"]], cw, ch, draggable=self.editable,
+                                    show_distribution=self.show_distribution,
+                                    show_location=self.show_location)
                     card.activated.connect(self.unit_activated)
                     slot.set_card(card)
                 self.grid.addWidget(slot, r, c)
@@ -249,6 +272,7 @@ class GridBoard(QWidget):
     def showEvent(self, e):
         super().showEvent(e); self._timer.start()
 
+
 class StockBar(QWidget):
     def __init__(self, text):
         super().__init__()
@@ -265,6 +289,7 @@ class StockBar(QWidget):
         self.value.setText(f"{qty:,} / {mx:,} left  ({pct:.0%})")
         self.bar.setRange(0, mx); self.bar.setValue(min(qty, mx))
         self.bar.setStyleSheet(f"QProgressBar::chunk{{background:{color};border-radius:5px;}}")
+
 
 class CardIcon(QWidget):
     """Summary-card icon ('people', 'house', 'house_empty') painted in the theme accent color."""
@@ -297,6 +322,7 @@ class CardIcon(QWidget):
             p.setPen(Qt.PenStyle.NoPen if filled else QPen(c, 2.4))
             p.setBrush(c.lighter(185) if filled else Qt.BrushStyle.NoBrush)
             p.drawRect(box(.44, .6, .12, .2))                                         # door
+
 
 class SummaryCard(QFrame):
     def __init__(self, title, kind):
