@@ -3,6 +3,7 @@ from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import QWidget, QFrame, QVBoxLayout, QLineEdit, QCheckBox, QPushButton
 from widgets import label
 
+
 class LoginWindow(QWidget):
     authenticated = pyqtSignal(str)     # username
 
