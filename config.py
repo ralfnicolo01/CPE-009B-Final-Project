@@ -1,8 +1,13 @@
 """Central configuration: file paths and constants."""
+import sys
 from pathlib import Path
 
-BASE_DIR = Path(__file__).resolve().parent
+if getattr(sys, "frozen", False):
+    BASE_DIR = Path(sys.executable).parent
+else:
+    BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = BASE_DIR / "data"
+DATA_DIR.mkdir(exist_ok=True)   # make sure the data folder exists (important for the built exe)
 
 USERS_CSV, UNITS_CSV, STOCK_CSV, MEALS_CSV, DSWD_CSV, LOGS_CSV, SETTINGS_CSV = (
     DATA_DIR / f"{n}.csv" for n in ("users", "units", "stock", "meals", "dswd", "logs", "settings"))
