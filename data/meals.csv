@@ -1,2 +1,3 @@
-unit_id,date,meal,status,ration,qty
-T-001,2026-10-27,Breakfast,Received,FFP,3
+unit_id,date,meal,status,ration,qty,member_id
+T-001,2026-10-27,Breakfast,Received,FFP,3,
+T-001,2026-10-30,Breakfast,Pending,FFP,0,1b6a60638c46

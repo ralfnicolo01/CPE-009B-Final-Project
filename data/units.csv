@@ -1,2 +1,2 @@
 id,location,modality,capacity,family_name,headcount,col,row
-T-001,dsds,Classroom,10,dsd,3,2,0
+T-001,dsds,Classroom,10,"[{""id"": ""ba71da56ec7b"", ""family_name"": ""dsd"", ""members"": [{""id"": ""1b6a60638c46"", ""name"": ""Member 1"", ""age"": """", ""barangay"": """"}, {""id"": ""9362b0c0f4fa"", ""name"": ""Member 2"", ""age"": """", ""barangay"": """"}, {""id"": ""a0bf102bfa1d"", ""name"": ""Member 3"", ""age"": """", ""barangay"": """"}]}]",3,2,0

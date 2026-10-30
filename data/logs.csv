@@ -27,3 +27,8 @@ timestamp,date,unit_id,action,details
 2026-10-27 19:27:29,2026-10-27,SYSTEM,Setting changed,Grid: 6x12 -> 6x8
 2026-10-27 19:27:31,2026-10-27,SYSTEM,Setting changed,Grid: 6x8 -> 8x8
 2026-10-27 19:33:54,2026-10-27,SYSTEM,Admin login,admin
+2026-10-30 18:40:17,2026-10-30,SYSTEM,Daily reset,Breakfast / Lunch / Dinner distribution status reset
+2026-10-30 18:40:34,2026-10-30,SYSTEM,Admin login,admin
+2026-10-30 18:40:34,2026-10-30,T-001,Unit edited,families updated (1 families / 3 occupants)
+2026-10-30 18:40:45,2026-10-30,T-001,Meal update,Breakfast: Received for Member 1 (Family Food Pack (FFP))
+2026-10-30 18:40:46,2026-10-30,T-001,Meal update,Breakfast: Pending for Member 1 (Family Food Pack (FFP))
