@@ -5,6 +5,7 @@ from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QGr
 from widgets import SummaryCard, StockBar, GridBoard, VACANT, PARTIAL, FULL, label, scroll_page
 from unit_dialog import UnitDialog
 
+
 class DashboardTab(QWidget):
     def __init__(self, dm):
         super().__init__()
@@ -34,7 +35,10 @@ class DashboardTab(QWidget):
         top = QHBoxLayout()
         self.dates = QComboBox(); self.dates.setMinimumWidth(160)
         self.dates.currentTextChanged.connect(self.load_logs)
-        top.addWidget(QLabel("Date:")); top.addWidget(self.dates); top.addStretch()
+        self.log_filter = QComboBox(); self.log_filter.addItems(("All activity", "Distribution history"))
+        self.log_filter.currentTextChanged.connect(self.load_logs)
+        top.addWidget(QLabel("Date:")); top.addWidget(self.dates)
+        top.addWidget(QLabel("Show:")); top.addWidget(self.log_filter); top.addStretch()
         ll.addLayout(top)
         self.log_table = t = QTableWidget(0, 4)
         t.setHorizontalHeaderLabels(["Time", "Unit", "Activity", "Details"])
@@ -54,8 +58,8 @@ class DashboardTab(QWidget):
         sl.addWidget(label(f'<span style="color:{VACANT}">●</span> Vacant &nbsp; '
                            f'<span style="color:{PARTIAL}">●</span> Partly occupied &nbsp; '
                            f'<span style="color:{FULL}">●</span> Full &nbsp;&nbsp;|&nbsp;&nbsp; '
-                           'B / L / D = Breakfast / Lunch / Dinner received', "hint", rich=True))
-        self.board = GridBoard(editable=False)
+                           'B / L / D = Breakfast / Lunch / Dinner received · DSWD = relief pack received', "hint", rich=True))
+        self.board = GridBoard(editable=False, show_location=True)
         self.board.unit_activated.connect(self.open_unit)
         sl.addWidget(self.board)
         root.addWidget(sbox)
@@ -86,6 +90,9 @@ class DashboardTab(QWidget):
 
     def load_logs(self, *_):
         rows = self.dm.logs_for(self.dates.currentText())
+        if self.log_filter.currentText() == "Distribution history":
+            distribution_actions = {"Meal update", "DSWD family pack", "DSWD pack"}
+            rows = [record for record in rows if record["action"] in distribution_actions]
         self.log_table.setRowCount(len(rows))
         for r, row in enumerate(rows):
             for c, val in enumerate((row["timestamp"][11:19], row["unit_id"], row["action"], row["details"])):
