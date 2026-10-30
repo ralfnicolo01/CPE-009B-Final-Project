@@ -12,9 +12,9 @@ MEALS = ("Breakfast", "Lunch", "Dinner")
 
 # Ration types a person can receive for a meal (dropdown in the unit dialog)
 RATIONS = {
-    "FFP": "1. Family Food Pack (FFP)",
-    "RTEF": "2. Ready-to-Eat Food (RTEF)",
-    "HOT": "3. Hot Meal (Lomi / Soup / Rice)",
+    "FFP": "Family Food Pack (FFP)",
+    "RTEF": "Ready-to-Eat Food (RTEF)",
+    "HOT": "Hot Meal (Lomi / Soup / Rice)",
 }
 
 # Counted stock items (FFP and hot meals are still ration choices, but are not tracked in stock)
