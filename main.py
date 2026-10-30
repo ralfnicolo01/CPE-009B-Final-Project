@@ -6,6 +6,7 @@ from login_window import LoginWindow
 from main_window import MainWindow
 from styles import style
 
+
 class Controller:
     def __init__(self, app):
         self.app, self.dm = app, DataManager()
@@ -32,6 +33,7 @@ class Controller:
         old = self.main
         self.show_login()
         old.close()
+
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
